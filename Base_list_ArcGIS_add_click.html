@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ẩn hoàn toàn viền Polygon</title>
+  <!-- Bootstrap CSS -->
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+  />
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+  <style>
+    body {
+      display: flex;
+      margin: 0;
+      overflow: hidden;
+    }
+    #sidebar {
+      width: 300px;
+      height: 100vh;
+      background: #f8f9fa;
+      padding: 15px;
+      overflow-y: auto;
+      box-shadow: 2px 0 5px rgba(0,0,0,0.2);
+      position: absolute;
+      left: 0;
+      top: 0;
+      z-index: 1000;
+    }
+    #map {
+      flex: 1;
+      height: 100vh;
+      width: calc(100vw - 300px);
+      transition: width 0.3s ease-in-out;
+    }
+    .toggle-btn {
+      position: absolute;
+      left: 10px;
+      top: 10px;
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      cursor: pointer;
+      border-radius: 5px;
+      z-index: 1100;
+    }
+    .collapsed {
+      transform: translateX(-320px);
+    }
+    .collapsed ~ #map {
+      width: 100vw !important;
+    }
+    .remove-btn {
+      background: none;
+      border: none;
+      color: red;
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 5px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Sidebar -->
+  <div id="sidebar" class="p-3">
+    <h5 class="text-center">Danh sách file KMZ</h5>
+    <input
+      type="file"
+      id="fileInput"
+      accept=".kmz"
+      multiple
+      class="form-control mb-2"
+    />
+    <ul id="fileList" class="list-group"></ul>
+  </div>
+
+  <!-- Nút thu gọn/mở rộng sidebar -->
+  <button id="toggleSidebar" class="toggle-btn">☰</button>
+
+  <!-- Khu vực bản đồ -->
+  <div id="map"></div>
+
+  <!-- Scripts -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/jszip/dist/jszip.min.js"></script>
+  <script src="https://unpkg.com/togeojson"></script>
+  <!-- (Tùy chọn) Nếu cần Turf.js, bạn có thể thêm:
+  <script src="https://unpkg.com/@turf/turf/turf.min.js"></script> -->
+
+  <script>
+    // Khởi tạo bản đồ với ArcGIS World Imagery
+    var map = L.map("map", { zoomControl: false }).setView([21.0285, 105.8542], 10);
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      attribution: "Tiles © Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+      maxZoom: 19
+    }).addTo(map);
+
+    var kmzLayers = {};
+    var sidebar = document.getElementById("sidebar");
+    var toggleBtn = document.getElementById("toggleSidebar");
+    var mapContainer = document.getElementById("map");
+
+    toggleBtn.addEventListener("click", function () {
+      sidebar.classList.toggle("collapsed");
+      mapContainer.style.width = sidebar.classList.contains("collapsed")
+        ? "100vw"
+        : "calc(100vw - 300px)";
+      setTimeout(function () {
+        map.invalidateSize();
+      }, 300);
+    });
+
+    document.getElementById("fileInput").addEventListener("change", function (event) {
+      Array.from(event.target.files).forEach(function (file) {
+        processKMZ(file);
+      });
+    });
+
+    function processKMZ(file) {
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        JSZip.loadAsync(e.target.result)
+          .then(function (zip) {
+            var kmlFileName = Object.keys(zip.files).find(function (name) {
+              return name.match(/\.kml$/i);
+            });
+            if (!kmlFileName) {
+              alert("File KMZ không hợp lệ (không tìm thấy KML)!");
+              return;
+            }
+            zip.files[kmlFileName]
+              .async("string")
+              .then(function (kmlText) {
+                parseKML(kmlText, file.name);
+              });
+          })
+          .catch(function (err) {
+            console.error("Lỗi đọc KMZ:", err);
+            alert("Không thể đọc file KMZ!");
+          });
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function parseKML(kmlText, fileName) {
+      var parser = new DOMParser();
+      var kmlDom = parser.parseFromString(kmlText, "text/xml");
+
+      var errors = kmlDom.getElementsByTagName("parsererror");
+      if (errors.length > 0) {
+        alert("File KML không hợp lệ!");
+        return;
+      }
+
+      var geoJson = toGeoJSON.kml(kmlDom);
+      if (!geoJson.features.length) {
+        alert("Không có dữ liệu hợp lệ trong file KML!");
+        return;
+      }
+
+      console.log("GeoJSON từ file:", fileName, geoJson);
+
+      // Tạo layer và thiết lập sự kiện click để hiển thị description
+      var layer = L.geoJSON(geoJson, {
+        style: function (feature) {
+          var type = feature.geometry.type || "";
+          if (type.includes("Polygon")) {
+            return {
+              stroke: false,
+              fillColor: feature.properties.fill || "#3388ff",
+              fillOpacity: feature.properties["fill-opacity"] || 0.5
+            };
+          }
+          if (type.includes("LineString")) {
+            return {
+              color: feature.properties.stroke || "#3388ff",
+              weight: feature.properties["stroke-width"] || 2,
+              fill: false
+            };
+          }
+          return {
+            stroke: false,
+            fillColor: "#3388ff",
+            fillOpacity: 0.5
+          };
+        },
+        onEachFeature: function(feature, featureLayer) {
+          // Hiển thị description của đối tượng, nếu không có thì thông báo "Không có mô tả"
+          var description = feature.properties.description || "Không có mô tả";
+          featureLayer.bindPopup(description);
+        }
+      });
+
+      kmzLayers[fileName] = layer;
+      map.addLayer(layer);
+      map.fitBounds(layer.getBounds());
+      addToList(fileName, layer);
+    }
+
+    function addToList(fileName, layer) {
+      var fileList = document.getElementById("fileList");
+      var listItem = document.createElement("li");
+      listItem.className = "list-group-item d-flex justify-content-between align-items-center";
+
+      var checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = true;
+      checkbox.onchange = function () {
+        if (checkbox.checked) {
+          map.addLayer(layer);
+        } else {
+          map.removeLayer(layer);
+        }
+      };
+
+      var removeBtn = document.createElement("button");
+      removeBtn.innerHTML = "✖";
+      removeBtn.className = "remove-btn";
+      removeBtn.onclick = function () {
+        map.removeLayer(layer);
+        delete kmzLayers[fileName];
+        fileList.removeChild(listItem);
+      };
+
+      listItem.appendChild(checkbox);
+      listItem.appendChild(document.createTextNode(" " + fileName));
+      listItem.appendChild(removeBtn);
+      fileList.appendChild(listItem);
+    }
+  </script>
+</body>
+</html>
